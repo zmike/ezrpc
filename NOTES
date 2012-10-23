@@ -1,0 +1,2 @@
+to empty the db
+TRUNCATE TABLE `vmstats`; TRUNCATE TABLE `vms`; TRUNCATE TABLE `vmnotes`; TRUNCATE TABLE `vmconsolelocks`; TRUNCATE TABLE `vmconfig`; TRUNCATE TABLE `vmstats`; TRUNCATE TABLE `vifstats`; TRUNCATE TABLE `vifs`; TRUNCATE TABLE `vifconfig`; TRUNCATE TABLE `sessions`; TRUNCATE TABLE `revisions`; TRUNCATE TABLE `nodestats`; TRUNCATE TABLE `nodes`; TRUNCATE TABLE `nodechildren`; TRUNCATE TABLE `nodeconfig`; TRUNCATE TABLE `diskstats`; TRUNCATE TABLE `disks`; TRUNCATE TABLE `diskconfig`;

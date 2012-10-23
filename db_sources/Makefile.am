@@ -1,0 +1,3 @@
+SUBDIRS = mysql
+
+MAINTAINERCLEANFILES = Makefile.in

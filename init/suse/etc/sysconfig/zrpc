@@ -1,0 +1,9 @@
+## Path:	Network/Administration/ZRPC
+## Description:	ZRPC daemon settings
+## Type:	string
+## Default:	""
+## ServiceRestart: zrpc
+#
+# Options for zrpc
+#
+ZRPC_OPTS=""

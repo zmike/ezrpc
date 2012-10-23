@@ -1,0 +1,7 @@
+
+#account required        pam_unix.so
+#auth    required        pam_unix.so nullok_secure
+
+# KERBEROS EXAMPLE
+auth    sufficient      pam_krb5.so use_first_pass ignore_root forwardable
+auth    required        pam_unix.so nullok_secure try_first_pass

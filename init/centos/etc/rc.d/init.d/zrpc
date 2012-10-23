@@ -1,0 +1,100 @@
+#!/bin/bash
+#
+# Init file for Zentific XMLRPC daemon
+#
+# chkconfig: 2345 55 25
+# description: Zentific XMLRPC daemon
+#
+# processname: zrpc
+# config: /opt/zentific/zrpc.conf
+# pidfile: /var/run/zentific/zrpc.pid
+
+# source function library
+. /etc/rc.d/init.d/functions
+
+# pull in sysconfig settings
+[[ -f /etc/sysconfig/zrpc ]] && . /etc/sysconfig/zrpc
+[[ -d /var/run/zentific ]] || mkdir -p /var/run/zentific
+
+RETVAL=0
+prog="zrpc"
+
+# Some functions to make the below more readable
+ZRPC=/opt/zentific/bin/zrpc
+PID_FILE=/var/run/zentific/zrpc.pid
+
+runlevel=$(set -- $(runlevel); eval "echo \$$#" )
+
+start()
+{
+	echo -n $"Starting $prog: "
+	$ZRPC $OPTIONS && success || failure
+	RETVAL=$?
+	[[ "$RETVAL" = 0 ]] && touch /var/lock/subsys/zrpc
+	echo
+}
+
+stop()
+{
+	echo -n $"Stopping $prog: "
+	if [[ -n "`pidfileofproc $ZRPC`" ]] ; then
+	    killproc $ZRPC
+	else
+	    failure $"Stopping $prog"
+	fi
+	RETVAL=$?
+	# if we are in halt or reboot runlevel kill all running sessions
+	# so the TCP connections are closed cleanly
+	if [ "x$runlevel" = x0 -o "x$runlevel" = x6 ] ; then
+	    killall $prog 2>/dev/null
+	fi
+	[[ "$RETVAL" = 0 ]] && rm -f /var/lock/subsys/zrpc
+	echo
+}
+
+reload()
+{
+	echo -n $"Reloading $prog: "
+	if [[ -n "`pidfileofproc $ZRPC`" ]] ; then
+	    killproc $ZRPC -HUP
+	else
+	    failure $"Reloading $prog"
+	fi
+	RETVAL=$?
+	echo
+}
+
+case "$1" in
+	start)
+		start
+		;;
+	stop)
+		stop
+		;;
+	restart)
+		stop
+		start
+		;;
+	reload)
+		reload
+		;;
+	condrestart)
+		if [[ -f /var/lock/subsys/zrpc ]] ; then
+			do_restart_sanity_check
+			if [[ "$RETVAL" = 0 ]] ; then
+				stop
+				# avoid race
+				sleep 3
+				start
+			fi
+		fi
+		;;
+	status)
+		status -p $PID_FILE zrpc
+		RETVAL=$?
+		;;
+	*)
+		echo $"Usage: $0 {start|stop|restart|reload|condrestart|status}"
+		RETVAL=1
+esac
+exit $RETVAL

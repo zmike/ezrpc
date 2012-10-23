@@ -1,0 +1,111 @@
+Updated: 2011-03-08
+
+considerations for an on-modification vm 'reboot needed' flag
+	-likely inappropriate to set before job completion (any code doing so will be removed)
+	-for a given action, possibly something like: 
+
+		/* in zrpc
+		 * this scheme really only appropriate for actions which would not harm/interrupt the target 
+		 */
+		if(object in use){ 
+			initialize job for action, targeting the object and related scheduler module
+			
+			initialize zentific internal "needs reboot" job on object with action job as dependency
+			// does nothing but sets needs reboot flag when 
+
+			commit both jobs
+		}
+
+		OR:
+
+		/* in zrpc */
+		if(object in use){ 
+			initialize job for action, targeting the object and related scheduler module
+			
+			initialize zentific 'on-complete' event for jobid of action job that sets "needs reboot" on object
+		}
+
+		OR
+	
+		/* in zensched */
+		during execution of job, callback to set flag on object could be used
+
+	/* related example code
+	int features = _getPlatformFeatures(_getPlatformIdByVm(uuid, error), error);
+		... other stuff ...
+	if(!(features & ZPLATFORM_ONLINEMODIFY)){
+		if((state = _getVMstat(uuid, "state", error))){
+			if ( strchr(state, 'r') || strchr(state, 'p') || strchr(state, 'b') )
+				_setVmNeedsReboot(uuid, TRUE, error);
+		}
+		ZFREE(state);
+	}
+	*/
+
+functions implemented like: getResourceRange(count, start, stop) 
+	allows us to get VMs 300-325 of 2000 on demand (to page between them, etc)
+resource pools
+new calling convention for stuff from zxdl to mid level
+	context structure passed as first argument that holds:
+		zxr call reference
+		zxr servlet reference
+		zxr error reference
+		zxr _priv reference
+		zentific session structure
+		possibly callbacks for certain operations so we 
+			can better compartmentalize and minimize
+			code inter-dependencies	
+memcached integration for db calls
+	optional from caller - some db functions will NEVER be appropriate
+		for caching. never for INSERT/UPDATE, only retrieval
+	ability to specify timeout for data is a requirement
+	
+master-slave zrpc
+multicast zensched
+user roles with privileges mapping to servlet:method and
+	permissions of access/modification by resourceType and by resourceID
+vm logging at every opportunity
+addJob for emailing
+thorough permission audit (and permissions grants to users/groups/roles to be 
+	more finely-grained)
+code review
+fuzzing
+pentest
+top-to-bottom test suite so we can do continuous integration and have
+	automatic compile and runtime tests be executed and reported.
+
+	 node 
+	   ^	
+	   |	    
+	   |       
+	zensched<-zrpc<-->client
+		   ^
+		   |
+		  nodes	
+	
+
+		zensched
+		    ^
+		    |
+		    |
+	zensched<--zrpc for nodes<-->zrpc master<--->zrpc slave<--zrpc
+		    ^						   ^
+		    |						   |
+		   nodes					clients
+		
+
+================================================================================
+on-going:
+
+-to detect functions which should be static in zsh or are just misnamed:
+	NOTE: sometimes theyre not static because they're intended to 
+		(eventually) be exposed. consider the intent before
+		blindly making what are superficial code improvements.
+		you could be making things more painful (or at minimum, causing
+		inconveniene) as time goes on.
+
+for y in include/functions-*;do 
+	for x in $(grep -o "[_a-zA-Z]*(" $y|tr -d '(');do
+		grep -qw $x src/servlets/zxdl/zentific-server.zxdl src/servlets/functions/functions-*^$(echo ${y/include\/functions-}|tr 'h' 'c') || echo $x
+	done
+done

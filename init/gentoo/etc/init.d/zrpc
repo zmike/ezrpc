@@ -1,0 +1,53 @@
+#!/sbin/runscript
+# Copyright 2010 Zentific LLC
+
+opts="${opts} reload"
+
+depend() {
+	use logger dns
+	need net mysql
+}
+ZRPC_PIDFILE=${ZRPC_PIDFILE:-/var/run/zentific/${SVCNAME}.pid}
+ZRPC_LOGFILE=${ZRPC_LOGFILE:-/var/log/zentific/${SVCNAME}.log}
+ZRPC_BINARY=${ZRPC_BINARY:-/opt/zentific/bin/zrpc}
+ZRPC_PID_DIR="$(dirname ${ZRPC_PIDFILE})"
+ZRPC_LOG_DIR="$(dirname ${ZRPC_LOGFILE})"
+setopts() {
+	myopts=""
+	[ "${ZRPC_PIDFILE}" != "/var/run/zentific/zrpc.pid" ] \
+		&& myopts="${myopts} -P ${ZRPC_PIDFILE}"
+	[ -n "${ZRPC_PORT}" ] && myopts="${myopts} -p ${ZRPC_PORT}"
+	[ -n "${ZRPC_LOGFILE}" ] && myopts="${myopts} -L ${ZRPC_LOGFILE}"
+	[ -n "${ZRPC_THREADS}" ] && myopts="${myopts} -t ${ZRPC_THREADS}"
+
+	return 0
+}
+
+start() {
+	ebegin "Starting ${SVCNAME}"
+	[ -d ${ZRPC_PID_DIR} ] || mkdir -p ${ZRPC_PID_DIR}
+	[ -d ${ZRPC_LOG_DIR} ] || mkdir -p ${ZRPC_LOG_DIR}
+	setopts || return 1
+	einfo "Using options${myopts}"
+	start-stop-daemon --start --exec "${ZRPC_BINARY}" \
+	    --pidfile "${ZRPC_PIDFILE}" \
+	    -- "${myopts}" "${ZRPC_OPTS}"
+	eend $?
+}
+
+stop() {
+  ebegin "Stopping my_service"
+  start-stop-daemon --stop --exec "${ZRPC_BINARY}" \
+    --pidfile "${ZRPC_PIDFILE}"
+  eend $?
+}
+
+reload() {
+	ebegin "Reloading ${SVCNAME}"
+	setopts || return 1
+	einfo "Using options${myopts}"
+	start-stop-daemon --stop --signal HUP --oknodo \
+	    --exec "${ZRPC_BINARY}" --pidfile "${ZRPC_PIDFILE}" \
+	-- "${myopts}" "${ZRPC_OPTS}"
+	eend $?
+}

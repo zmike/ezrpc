@@ -1,0 +1,12 @@
+# Default settings for openssh-server. This file is sourced by /bin/sh from
+# /etc/init.d/zrpc.
+
+# Options to pass to zrpc
+ZRPC_OPTS=
+
+# OOM-killer adjustment for sshd (see
+# linux/Documentation/filesystems/proc.txt; lower values reduce likelihood
+# of being killed, while -17 means the OOM-killer will ignore zrpc; set to
+# the empty string to skip adjustment)
+ZRPC_OOM_ADJUST=-17
+

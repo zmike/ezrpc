@@ -1,0 +1,7 @@
+Zentific RPC (zrpc) Install notes:
+
+./bootstrap.sh
+make && make install 
+
+Default installation path: /opt/zentific
+Modify the configuration file at /opt/zentific/zrpc.conf

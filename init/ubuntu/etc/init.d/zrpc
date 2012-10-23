@@ -1,0 +1,135 @@
+#! /bin/sh
+
+### BEGIN INIT INFO
+# Provides:             zrpc
+# Required-Start:       $remote_fs $syslog
+# Required-Stop:        $remote_fs $syslog
+# Default-Start:        2 3 4 5
+# Default-Stop:         0 1 6
+# Short-Description:    Zentific XMLRPC
+### END INIT INFO
+
+set -e
+
+# /etc/init.d/zrpc: start and stop the Zentific XMLRPC daemon
+
+test -x /opt/zentific/bin/zrpc || exit 0
+
+. /lib/lsb/init-functions
+
+if [ -n "$2" ]; then
+    ZRPC_OPTS="$ZRPC_OPTS $2"
+fi
+
+export ZRPC_OOM_ADJUST=-17
+
+# Are we running from init?
+run_by_init() {
+    ([ "$previous" ] && [ "$runlevel" ]) || [ "$runlevel" = S ]
+}
+
+check_dev_null() {
+    if [ ! -c /dev/null ]; then
+        if [ "$1" = log_end_msg ]; then
+            log_end_msg 1 || true
+        fi
+        if ! run_by_init; then
+            log_action_msg "/dev/null is not a character device!"
+        fi
+        exit 1
+    fi
+}
+
+check_privsep_dir() {
+    # Create the PrivSep empty dir if necessary
+    if [ ! -d /var/run/zentific ]; then
+        mkdir /var/run/zentific
+        chmod 0755 /var/run/zentific
+    fi
+}
+
+export PATH="${PATH:+$PATH:}/opt/zentific/bin"
+
+case "$1" in
+  start)
+        check_privsep_dir
+        check_dev_null
+        log_daemon_msg "Starting Zentific XMLRPC daemon" "zrpc"
+        if start-stop-daemon --start --quiet --oknodo --pidfile /var/run/zentific/zrpc.pid --exec /opt/zentific/bin/zrpc -- $ZRPC_OPTS; then
+            log_end_msg 0
+        else
+            log_end_msg 1
+        fi
+        ;;
+  stop)
+        log_daemon_msg "Stopping Zentific XMLRPC daemon" "zrpc"
+        if start-stop-daemon --stop --quiet --oknodo --pidfile /var/run/zentific/zrpc.pid; then
+            log_end_msg 0
+        else
+            log_end_msg 1
+        fi
+        ;;
+
+  reload|force-reload)
+        log_daemon_msg "Reloading Zentific XMLRPC daemon's configuration" "zrpc"
+        if start-stop-daemon --stop --signal 1 --quiet --oknodo --pidfile /var/run/zentific/zrpc.pid --exec /opt/zentific/bin/zrpc; then
+            log_end_msg 0
+        else
+            log_end_msg 1
+        fi
+        ;;
+
+  restart)
+        check_privsep_dir
+        log_daemon_msg "Restarting Zentific XMLRPC daemon" "zrpc"
+        start-stop-daemon --stop --quiet --oknodo --retry 30 --pidfile /var/run/zentific/zrpc.pid
+        check_dev_null log_end_msg
+        if start-stop-daemon --start --quiet --oknodo --pidfile /var/run/zentific/zrpc.pid --exec /opt/zentific/bin/zrpc -- $ZRPC_OPTS; then
+            log_end_msg 0
+        else
+            log_end_msg 1
+        fi
+        ;;
+
+  try-restart)
+        check_privsep_dir
+        log_daemon_msg "Restarting Zentific XMLRPC daemon" "zrpc"
+        set +e
+        start-stop-daemon --stop --quiet --retry 30 --pidfile /var/run/zentific/zrpc.pid
+        RET="$?"
+        set -e
+        case $RET in
+            0)
+                # old daemon stopped
+                check_for_no_start log_end_msg
+                check_dev_null log_end_msg
+                if start-stop-daemon --start --quiet --oknodo --pidfile /var/run/zentific/zrpc.pid --exec /opt/zentific/bin/zrpc -- $ZRPC_OPTS; then
+                    log_end_msg 0
+                else
+                    log_end_msg 1
+                fi
+                ;;
+            1)
+                # daemon not running
+                log_progress_msg "(not running)"
+                log_end_msg 0
+                ;;
+            *)
+                # failed to stop
+                log_progress_msg "(failed to stop)"
+                log_end_msg 1
+                ;;
+        esac
+        ;;
+
+  status)
+        status_of_proc -p /var/run/zentific/zrpc.pid /opt/zentific/bin/zrpc zrpc && exit 0 || exit $?
+        ;;
+
+  *)
+        log_action_msg "Usage: /etc/init.d/zrpc {start|stop|reload|force-reload|restart|try-restart|status}"
+        exit 1
+esac
+
+exit 0
+

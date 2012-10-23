@@ -1,0 +1,12 @@
+Source: zrpc
+Section: devel
+Priority: optional
+Maintainer: Zentific <dev@zentific.com>
+Build-Depends: debhelper (>= 7), libglib2.0-dev (>= 2.12), libmysqlclient15-dev, libpam0g-dev, libssl-dev, libxml2-dev, libzxr, libzshare
+Standards-Version: 3.8.0
+Homepage: <http://www.zentific.com/>
+
+Package: zrpc
+Architecture: any
+Depends: libglib2.0-0, libmysqlclient15off, libpam0g, libssl0.9.8, libxml2, libzxr, libzshare
+Description: <Zentific XMLRPC server>

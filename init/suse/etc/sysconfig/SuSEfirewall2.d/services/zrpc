@@ -1,0 +1,5 @@
+## Name: Zentific XMLRPC
+## Description: Open ports for Zentific XMLRPC
+
+# space separated list of allowed TCP ports
+TCP="4444"

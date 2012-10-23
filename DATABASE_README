@@ -1,0 +1,4 @@
+this needs to be written
+zentific.sql is the latest schema
+/opt/zentific/db/zrpc.conf is the zrpc db config
+make a zentific db table/user, import the schema, set the user/pass/table name in the config, and run zrpcdb_init (included with zrpc) to set the initial admin user password

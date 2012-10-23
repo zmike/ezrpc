@@ -1,0 +1,5 @@
+[ZRPC]
+title=Zentific XMLRPC
+description=ZRPC is the Zentific XMLRPC daemon
+ports=4444/tcp
+

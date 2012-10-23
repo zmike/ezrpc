@@ -1,0 +1,3357 @@
+/* zrpc: RPC database+server for Zentific
+ * Copyright (C) 2007, 2008, 2009, 2010, 2011 Zentific LLC and AUTHORS
+ *
+ * All rights reserved.
+ * Use is subject to license terms.
+ *
+ * Please visit http://zentific.com for news and updates
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ */
+//namespace Zentific;
+
+Azy_Error NOT_AUTHORIZED			= 1	{ You do not have sufficient privileges for that action! };
+Azy_Error INVALID_SESSION			= 2	{ Your session is invalid. };
+Azy_Error EXPIRED_SESSION			= 3	{ Your session has expired. Please log in again. };
+Azy_Error VALID_SESSION			= 4	{ Your session is valid.  This makes no sense. };
+Azy_Error MAX_LOGIN_FAILURES		= 5	{ You have exceeded the maximum number of login failures! };
+Azy_Error INVALID_PARAMETER		= 6	{ You have specified an invalid argument in your method call. };
+
+Azy_Error UNSPECIFIED_ERROR		= 8	{ An unspecified error has occurred. This is a generic error message. };
+Azy_Error CONSOLE_LOCKED			= 9	{ The console is currently locked. };
+Azy_Error SCHED_ERROR			= 10	{ A scheduler error has occurred. };
+Azy_Error VM_LOCKED				= 11	{ The VM is currently locked. };
+
+/* can probably merge into other more generic errors */
+Azy_Error PLATFORM_NOT_PRESENT		= 12	{ The platform specified is not present. };
+Azy_Error PLATFORM_MODULE_NOT_PRESENT	= 13	{ The platform module specified is not present. };
+
+Azy_Error NODE_DISABLED			= 14	{ The node specified is currently disabled. };
+Azy_Error UNKNOWN_RESOURCE			= 15	{ Unknown resource. };
+Azy_Error ENTITY_ALREADY_EXISTS		= 16	{ The entity specified already exists in the database. };
+
+/* TODO consider a more generic RESOURCE_UNCONFIGURED error */
+Azy_Error NODE_UNCONFIGURED			= 17	{ The node specified has not yet been configured. };
+
+Azy_Error NOT_AUTHENTICATED			= 18	{ Requires authentication! Please call User.login. };
+Azy_Error RESOURCE_IN_USE			= 19	{ Specified resource is in use. };
+Azy_Error NO_CHANGE_PERFORMED		= 20	{ Specified resource was not modified. };
+Azy_Error UNKNOWN_ERROR			= 21	{ An unknown error has occurred. };
+
+/* FIXME use these */
+Azy_Error JOB_CREATION_FAILED		= 25	{ Job could not be created. };
+Azy_Error JOB_EXECUTION_FAILED		= 26    { Job has failed during execution. };
+Azy_Error CONSOLE_DISCONNECT_FAILED		= 27	{ Console disconnect failed. };
+Azy_Error CONSOLE_DAEMON_NOT_FOUND		= 28	{ Console daemon not running or otherwise inacessible. };
+Azy_Error CONSOLE_CONNECT_FAILED		= 29	{ Console failed to connect. };
+Azy_Error INSUFFICIENT_RESOURCES		= 30	{ Insufficient resources exist to perform the requested operation. };
+
+Azy_Error NOT_IMPLEMENTED			= 97	{ This feature is not implemented. };
+Azy_Error UNKNOWN_FAILURE			= 98	{ An unknown failure has occurred. };
+Azy_Error SERVER_FAILURE			= 99	{ A server failure has occurred. };
+Azy_Error NO_ERROR				= 100	{ No error has occurred. };
+
+/* these errors indicate that the scheduler could not be signalled for a new job.
+ * the job was, however, still added to the db.
+ */
+Azy_Error SCHEDULER_NOT_FOUND		= 1018	{ The scheduler was not detected as running. Restart it if this is incorrect. };
+Azy_Error SCHEDULER_AUTH		= 1019	{ ZRPC does not have permission to send signals to zensched. Ensure that you are running them as the same user. };
+Azy_Error SCHEDULER_CONNECT_ERROR	= 1020	{ Could not connect to the scheduler for job notification. };
+
+Azy_Error MEMORY_CRISIS			= 666	{ The server has just suffered some sort of memory issue while trying to allocate for a call. };
+
+/* user errors */
+Azy_Error USER_PASSWORD			= 700;
+
+/* database errors */
+/* this will be 1037 VVV */
+Azy_Error DB_CONNECT			= 7	{ A database connection error has occurred, please inform your administrator. };
+	/* ^^^^ */
+Azy_Error DB_MULTI				= 1030	{ A database query has returned too many results.  Contact your administrator immediately. };
+Azy_Error DB_QUERY				= 1031	{ A database query that should have returned results has not. Either the parameters specified were wrong, or the database is corrupted. };
+Azy_Error DB_FAIL				= 1032	{ A database error has occurred.  Contact your administrator. };
+Azy_Error DB_CONFIG				= 1039	{ The database config file could not be read. };
+
+/* this error code is for random (but harmless) errors.
+ * any call that returns it should be considered successful.
+ */
+Azy_Error MISC_ERROR			= 7777	{ This is a stub error message which should have been replaced. Lazy programmer! Lazy! };
+
+struct SESSION {
+	int authenticated;
+	int uid;   // userid of the client (when authenticated)
+	string username;   // username of the client (when authenticated)
+	string session_id;
+	string client_host;
+	string referrer;
+	int failures;
+	int timestamp;
+	//FIXME timestamp
+	int status;
+};
+
+struct KEYVALUE {
+	string key;
+	string value;
+	string type;
+};
+
+struct PLUGIN {
+	int id;
+	int privilege;
+	string name;
+	string description;
+	int platform; /* if applicable */
+	boolean frontend;
+	boolean rpc;
+	boolean scheduler;
+	boolean poller;
+	boolean enabled;
+	boolean controlnetwork;
+	boolean controlstorage;
+	boolean controlplatform;
+};
+
+struct PLATFORM {
+	int id;
+	string name;
+	string version;
+	string vendor;
+	string build;
+	string description;
+	string mechanism;	/* backend scheduler control module */
+	int features;		/* packed with flags describing various capabilities. see zplatform_feature_flags enum */
+	boolean enabled;
+
+	array<KEYVALUE> config;
+	/* array<jobmapping> map;
+	 *	FIXME implement. used to specify alternate job routing if default 'mechanism' is insufficient
+	 *		think of it as an extension or override of the default mechanism
+	 *	jobmapping is { string jobfunction, string module };
+	 *	TODO consider the possible per-node requirement for alternate routings of this sort. may
+	 *		make it a better case to stuff this into a config param which can be relative to user/group/node/nodegroup/etc
+	 */
+};
+
+struct LOG {
+	string timestamp; //FIXME what about unixtime
+	int severity;
+	int uid;
+	string message;
+};
+
+struct DISK {
+	string label;
+	string int_dev;
+	string ext_dev;
+	string mode;
+	string type;
+	string partition_type;
+	string mapped_dev;
+	double ooreq;
+	double rdreq;
+	double wrreq;
+	double num_sectors;
+	double start_sector;
+	double free;
+	double capacity;
+	int size_sector;
+	int block_size;
+};
+
+struct NETIF {
+	int id;
+	string label;
+	string name;
+	string uuid;
+	string mac;
+	string bridge;
+	string script;
+	string type;	  //VIF={pv, ioemu};, or PIF
+
+	boolean loopback;
+	boolean connected; //up or down
+	boolean promisc;
+
+	string ip;
+	string netmask;
+	string gateway;
+	string broadcast;
+
+	int mtu;
+
+	double txpackets;
+	double txbytes;
+	double txdrop;
+	double txerr;
+
+	double rxpackets;
+	double rxbytes;
+	double rxdrop;
+	double rxerr;
+
+	double collisions;
+};
+
+struct VM {
+
+	//FIXME add architecture
+	string name;
+	string uuid;
+	string puuid;
+	string type;
+	string os;
+	int id;
+
+	//FIXME this should be more generic
+	string kernel;
+	string ramdisk;
+	string cmdline; //kernel params
+
+	//FIXME this should be more generic too
+	string on_reboot;
+	string on_poweroff;
+	string on_crash;
+
+	int mem;
+	int maxmem;
+
+	int vcpus;
+
+	/* these four will be represented in
+	 *	the VM_STATS structure
+	 *
+	 *	Do not depend upon the presence
+	 *	of these members. They may be
+	 *	removed.
+	 *
+	 *	At this time, they will NOT be
+	 *	set during a VM.get operation
+	 */
+	double cpupct;
+	double cputime;
+	double uptime;
+	string state;
+
+	int vncport;
+	string vncpasswd;
+
+	array<DISK> disks;
+	array<NETIF> vifs;
+};
+
+struct NODE {
+
+	boolean enabled;
+
+	string uuid;
+	string kernel;
+	string address;
+	string os;
+	string architecture;
+	string hostname;
+	string domainname;
+	string platformver;
+	string platformbuild; //build#
+	string platformvendor;
+	string platformfull;
+	string platform;
+	string default_vnc_pass;
+	int  num_cpus;
+	int  cores_per_socket;
+	int  threads_per_core;
+	int  num_cpu_nodes;
+	int  sockets_per_node;
+	double  cpu_mhz;
+	double  total_phys_mem;
+	//NOTE: omitted because it is a variable value
+	//double  free_phys_mem;
+	boolean hvm;
+	string capabilities;
+	string controlmodule;
+};
+
+struct NODE_STATS {
+
+	int timestamp;
+	double iowait;
+	string loadavg;
+	double uptime;
+	double cpupct;
+	int intr;
+	int ctxts;
+	int num_procs;
+	int mem_free;
+	int mem_total;
+	int mem_shared;
+	int mem_buffered;
+	int swap_total;
+	int swap_free;
+	string domainname;
+	string hostname;
+	string address;
+	double total_phys_mem;
+	double free_phys_mem;
+
+	//FIXME include in structure or not?
+	//array<string> child_uuids;
+	//array<int> child_domids;
+
+};
+
+struct USER {
+
+	int uid;
+	string username;
+	string givenname;
+	string email;
+	int active;
+	int type;
+	string language;
+};
+
+struct USER_GROUP {
+
+	int gid;
+	int privilege;
+	string name;
+	string desc;
+	/*array<int> uids;*/
+};
+
+struct JOB {
+
+	int id;
+	int uid;
+	int status;
+	string resource;
+	string module_name;
+	string module_function;
+	string input_string;
+	string output_string;
+	string target_vm;
+	string target_node;
+	string target_host;
+	string extra;
+	int time_started; //unixtime?
+	int time_finished;
+	int time_queued;
+	array<int> dependencies;
+	int timestamp;
+	int return_value;
+	int pid;
+
+};
+
+struct CLUSTER {
+
+	string name;
+	string uuid;
+	array<NODE> nodes;
+	array<VM> vm;
+	int mem;
+	int disk;
+	int cpus;
+	int num_nodes;
+	int managed; //i.e. auto migrations?
+
+};
+
+//for provisioning
+struct TEMPLATE {
+	int id;
+	string name;
+	string description;
+	string type;
+	int platform;
+	string architecture;
+	string uuid;
+};
+
+struct STORAGE {
+	int id;
+	int mid;		/* control module */
+	string host;
+	string name;
+	string type;		/*imagestore, diskstore, lvm, raw, sharednet..? */
+	string path;
+	string mode;		/* read-only, read-write */
+	int capacity;		/* megabytes */
+	int freespace;		/* megabytes */
+};
+
+struct NETWORK {
+	int id;
+	int mid;	/* control module */
+	string name;
+	string host;
+	string type;
+	array<int> vlans;
+	string network;
+	string netmask;
+	string gateway;
+	string mac;
+	string interface;
+};
+
+struct ZSYS {
+	string arch;
+	string ostype;
+	string os;
+	string version;
+	array<string> modules;
+
+	string domainname;
+
+	double numcpus;
+	double userprocs;
+	double nicedprocs;
+	double sysprocs;
+	double idle;
+	double steal;
+	double guest;
+	double forks;
+	double runprocs;
+	double blockprocs;
+	double entropy;
+	double procs;
+	double ctxt;
+	double intr;
+
+	array<string> cpuflags;
+	string model;
+
+	double mhz;
+	double iowait;
+	double load1;
+	double load5;
+	double load15;
+
+	double page_size;
+	double mem_free;
+	double mem_total;
+	double mem_shared;
+	double mem_buffered;
+	double swap_free;
+	double swap_total;
+	double mem_active;
+	double mem_inactive;
+};
+
+struct ZDISK {
+	string name;
+	double read_ios;
+	double read_merges;
+	double read_sectors;
+	double read_ticks;
+
+	double write_ios;
+	double write_merges;
+	double write_sectors;
+	double write_ticks;
+
+	double in_flight;
+	double io_ticks;
+	double time_in_queue;
+};
+
+struct ZVIF {
+	int id;
+	string name;
+
+	int mtu;
+	int bridge;
+	string mac;
+
+	string ip;
+	string netmask;
+	string broadcast;
+
+	double rxbytes;
+	double rxpackets;
+	double rxerr;
+	double rxdrop;
+
+	double rfifo;
+	double frame;
+	double rcompressed;
+	double multicast;
+
+	double txbytes;
+	double txpackets;
+	double txerr;
+	double txdrop;
+
+	double tfifo;
+	double collisions;
+	double carrier;
+	double tcompressed;
+};
+
+struct ZPART {
+	string name;
+	string mode_opts;
+	string dev_location;
+	string mount_point;
+	string partition_type;
+
+	double f_bsize;
+	double f_frsize;
+	double f_block;
+	double f_bfree;
+	double f_bavail;
+	double f_files;
+	double f_ffree;
+	double f_favail;
+	double f_fsid;
+	double f_flag;
+	double f_namemax;
+};
+
+struct VMSTATS {
+	string uuid;
+
+	ZSYS system;
+
+	int numdisks;
+	array<ZDISK> disks;
+	array<ZPART> partitions;
+
+	int numvifs;
+	array<ZVIF> vifs;
+};
+
+
+Azy_Module VM {
+
+/** START SERVLET INCLUDES **/
+	<%
+
+	//zentific functions
+	#include "zentific-defines.h"
+	#include "ztypes.h"
+	#include "functions-zentific.h"
+	#include "functions-session.h"
+	#include "functions-vm.h"
+	#include "functions-log.h"
+	#include "functions-console.h"
+	#include "functions-node.h"
+	#include "functions-network.h"
+	#include "functions-storage.h"
+	#include "functions-user.h"
+	#include "servlets.h"
+
+	%>
+/** END SERVLET INCLUDES **/
+
+
+/** START SERVLET INITIALIZATION **/
+	// Servlet variables (This code is inserted into struct definition. You can
+	// access these variables using data_ pointer, see below for example)
+	__attrs__
+
+	<%
+		SESSION *session;
+		zentific_config *zconf;
+		Zentific_Ctx ctx;
+	%>
+
+	// Called before RPC is processed using methods defined below. You may do some
+	// common call processing here (authentication check, locking, etc.) Return EINA_FALSE
+	// if you want to inhibit actual RPC call.
+	__pre__
+	<%
+		PRE_CALL; /* data_, module */
+	%>
+
+	// Called when client disconnects.
+	__post__
+	<%
+		POST; /* data_ */
+	%>
+
+/** END SERVLET INITIALIZATION **/
+
+/** START SERVLET METHODS **/
+    /* ACTIONS */
+	JOB addVmToNode(string uuid, VM vm)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_NODE(_addVmToNode(&data_->ctx, uuid, vm, data_->session->uid));
+	%>
+
+	JOB unpause(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_unpauseVM(&data_->ctx, uuid, data_->session->uid));
+	%>
+
+	JOB pause(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_pauseVM(&data_->ctx, uuid, data_->session->uid));
+	%>
+
+	JOB poweron(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_poweronVM(&data_->ctx, uuid, data_->session->uid, EINA_FALSE));
+	%>
+
+	JOB poweronPaused(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_poweronVM(&data_->ctx, uuid, data_->session->uid, EINA_TRUE));
+	%>
+
+	JOB poweroff(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_poweroffVM(&data_->ctx, uuid, data_->session->uid));
+	%>
+
+	JOB shutdown(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_shutdownVM(&data_->ctx, uuid, data_->session->uid));
+	%>
+
+	JOB reboot(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_rebootVM(&data_->ctx, uuid, data_->session->uid));
+	%>
+
+	JOB disableStateHandling(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_disableStateHandlingVM(&data_->ctx, uuid, data_->session->uid));
+	%>
+
+	int getGraphicalConsoleTunnelPort(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getGraphicalConsoleTunnelPort(&data_->ctx, uuid));
+	%>
+
+	string getName(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getVMattribute(&data_->ctx, uuid, "name"));
+	%>
+
+	JOB enableStateHandling(string uuid)
+	<%
+		//FIXME privs
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_enableStateHandlingVM(&data_->ctx, uuid, data_->session->uid));
+	%>
+
+    /* STATISTICS */
+	boolean updateVms(string uuid, array<VM> vms)
+	<%
+		CHECK_ZPOLL_PRIV;
+		_updateVMs(&data_->ctx, uuid, vms);
+	%>
+
+	boolean ztoolsUpdate(string uuid, array<VMSTATS> stats)
+	<%
+		CHECK_ZPOLL_PRIV;
+		_ztoolsUpdate(&data_->ctx, uuid, stats);
+	%>
+
+
+	/* VMS */
+	boolean isVm(string uuid)
+	<%
+		/* FIXME we're using UUIDs so using this to find all existing VMs would be
+		 *	rather difficult unless uuid generation has a randomness issue
+		 *
+		 *	BUT
+		 *
+		 *	this should probably be wrapped in a CHECK_EXIST_AND_PRIVS_VM
+		 */
+		_isVM(&data_->ctx, uuid);
+	%>
+
+	boolean isVmIgnored(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_isVmIgnored(&data_->ctx, uuid));
+	%>
+
+
+	VM get(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getVM(&data_->ctx, uuid));
+	%>
+
+	VM getByRevision(string uuid, int revision)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getVmByRev(&data_->ctx, uuid, revision));
+	%>
+
+	array<string> getAllByNode(string uuid)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getAllVmsByNode(&data_->ctx, uuid);
+	%>
+
+	array<VM> getAllFullByNode(string uuid)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getAllVmsFullByNode(&data_->ctx, uuid);
+	%>
+
+	array<string> getAll()
+	<%
+		/* data_ module */
+		if (!data_->ctx.user_type)
+			_getVMs(&data_->ctx, NULL, EINA_FALSE, -1, -1);
+		else
+			_getVMsUID(&data_->ctx, data_->session->uid, NULL, EINA_FALSE, -1, -1);
+	%>
+
+	array<string> getAllRange(int offset, int recordcount)
+	<%
+		/* data_ module */
+		if (!data_->ctx.user_type)
+			_getVMs(&data_->ctx, NULL, EINA_FALSE, offset, recordcount);
+		else
+			_getVMsUID(&data_->ctx, data_->session->uid, NULL, EINA_FALSE, offset, recordcount);
+	%>
+
+	array<string> getAllRangeSorted(string sortfield, boolean desc, int offset, int recordcount)
+	<%
+		/* data_ module */
+		if (!data_->ctx.user_type)
+			_getVMs(&data_->ctx, sortfield, desc, offset, recordcount);
+		else
+			_getVMsUID(&data_->ctx, data_->session->uid, sortfield, desc, offset, recordcount);
+	%>
+
+	array<VM> getAllFull()
+	<%
+		/* data_ module */
+		if (!data_->ctx.user_type)
+			_getVMsFull(&data_->ctx, NULL, EINA_FALSE, -1, -1);
+		else
+			_getVMsFullUID(&data_->ctx, data_->session->uid, NULL, EINA_FALSE, -1, -1);
+	%>
+
+	array<VM> getAllFullRange(int offset, int recordcount)
+	<%
+		/* data_ module */
+		if (!data_->ctx.user_type)
+			_getVMsFull(&data_->ctx, NULL, EINA_FALSE, offset, recordcount);
+		else
+			_getVMsFullUID(&data_->ctx, data_->session->uid, NULL, EINA_FALSE, offset, recordcount);
+	%>
+
+	array<VM> getAllFullRangeSorted(string sortfield, boolean desc, int offset, int recordcount)
+	<%
+		/* data_ module */
+		if (!data_->ctx.user_type)
+			_getVMsFull(&data_->ctx, sortfield, desc, offset, recordcount);
+		else
+			_getVMsFullUID(&data_->ctx, data_->session->uid, sortfield, desc, offset, recordcount);
+	%>
+
+	int getCount()
+	<%
+		_getVmCount(&data_->ctx);
+	%>
+
+	array<int> getUsers(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getAllUsersByVm(&data_->ctx, uuid));
+	%>
+
+	array<int> getGroups(string uuid)
+	<%
+		/* double check this */
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getAllUserGroupsByVm(&data_->ctx, uuid));
+	%>
+
+	int getPrivilegeByUID(string uuid, int uid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getVMprivilege(&data_->ctx, uuid, uid, -1));
+	%>
+
+	int getPrivilegeByGID(string uuid, int gid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getVMprivilege(&data_->ctx, uuid, -1, gid));
+	%>
+
+	array<KEYVALUE> getTopNCpuConsumers(int intervalminutes, int n)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getTopNCpuConsumers(&data_->ctx, intervalminutes, n);
+	%>
+
+	array<KEYVALUE> getTopNBandwidthConsumers(int intervalminutes, int n)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getTopNBandwidthConsumers(&data_->ctx, intervalminutes, n);
+	%>
+
+	boolean grantPrivilegeByUID(string uuid, int uid, int privilegetype)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_grantVMprivilege(&data_->ctx, uuid, uid, -1, privilegetype));
+	%>
+
+	boolean grantPrivilegeByGID(string uuid, int gid, int privilegetype)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_grantVMprivilege(&data_->ctx, uuid, -1, gid, privilegetype));
+	%>
+
+	boolean revokePrivilegeByUID(string uuid, int uid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_revokeVMprivilege(&data_->ctx, uuid, uid, -1));
+	%>
+
+	boolean revokePrivilegeByGID(string uuid, int gid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_revokeVMprivilege(&data_->ctx, uuid, -1, gid));
+	%>
+/*
+	boolean hasTextConsole(string uuid)
+	<%
+		//TODO FIXME
+		//	for xen pv, assume yes
+		//	for xen hvm, check whether serial='somepty' is set
+		//		may require poller changes
+		return EINA_TRUE;
+	%>
+*/
+	boolean hasGraphicalConsole(string uuid)
+	<%
+		CHECK_EXIST_AND_PRIVS_VM(_getVMattribute(&data_->ctx, uuid, "vncport"));
+	%>
+
+	array<string> getSupportedConsoles(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getSupportedConsoles(&data_->ctx, uuid));
+	%>
+
+
+	boolean disconnectTextConsole(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_disconnectConsole(&data_->ctx, uuid, "text"));
+	%>
+
+	boolean disconnectGraphicalConsole(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_disconnectConsole(&data_->ctx, uuid, "vnc"));
+	%>
+
+	int connectGraphicalConsole(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_connectGraphicalConsole(&data_->ctx, data_->session, uuid));
+	%>
+
+
+	int connectTextConsole(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_connectTextConsole(&data_->ctx, data_->session, uuid));
+	%>
+
+	boolean hasConsoleLock(string uuid, string type)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_hasConsoleLock(&data_->ctx, uuid, type));
+	%>
+
+	string getConsoleLockSession(string uuid, string type)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getConsoleLockSession(&data_->ctx, uuid, type));
+	%>
+
+	string getConsoleClientHost(string uuid, string type)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getConsoleClientHost(&data_->ctx, uuid, type));
+	%>
+
+	string getConsoleNodeHost(string uuid, string type)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getConsoleNodeHost(&data_->ctx, uuid, type));
+	%>
+
+	int getGraphicalConsolePort(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getGraphicalConsolePort(&data_->ctx, uuid));
+	%>
+
+	int getTextConsolePort(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getTextConsolePort(&data_->ctx, uuid));
+	%>
+
+	string getConsoleLockUsername(string uuid, string type)
+	<%
+		const char *username;
+		//FIXME ideal candidate for translation via XSLT stuff
+		CHECK_EXIST_AND_PRIVS_VM(
+			if (!ctx->count){
+				_getConsoleLockUser(ctx, uuid, type);
+				CTX_VALUE_RETURN;
+			} else {
+				username = CTX_PARAM_GET;
+				if (username == data_->session->username){
+					INF("consolelockuser returned  username %s session username %s\n\n", username, data_->session->username);
+					eina_stringshare_del(username);
+					username = eina_stringshare_add("self");
+				}
+				AZY_RETVAL(username);
+			}
+			CTX_RETURN /* makes the macro happy */);
+	%>
+
+	int getId(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getVMattribute(&data_->ctx, uuid, "domid"));
+	%>
+
+	string getNotes(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getVmNotes(&data_->ctx, uuid));
+	%>
+
+	boolean saveNotes(string uuid, string notes)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_saveVmNotes(&data_->ctx, uuid, notes));
+	%>
+
+	string getParentNodeAddress(string uuid)
+	<%
+		/* this was totally wrong and imo node addresses should only
+		 * be available to node owners and superusers
+		 */
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getVMparentAddress(&data_->ctx, uuid));
+	%>
+
+	string getParentNode(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getVMparentNode(&data_->ctx, uuid));
+	%>
+
+	array<LOG> getLogs(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getVmLogs(&data_->ctx, uuid));
+	%>
+
+	array<TEMPLATE> getAllTemplatesFull()
+	<%
+		_getAllTemplatesFull(&data_->ctx);
+	%>
+
+	array<int> getAllTemplates()
+	<%
+		_getAllTemplates(&data_->ctx);
+	%>
+
+	VM getTemplateConfigByName(string name)
+	<%
+		_getTemplateConfigByName(&data_->ctx, name);
+	%>
+
+	VM getTemplateConfig(int id)
+	<%
+		_getTemplateConfig(&data_->ctx, id);
+	%>
+
+	TEMPLATE getTemplate(int id)
+	<%
+		_getTemplate(&data_->ctx, id);
+	%>
+
+	TEMPLATE getTemplateByName(string name)
+	<%
+		_getTemplateByName(&data_->ctx, name);
+	%>
+
+	boolean needsReboot(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_needsReboot(&data_->ctx, uuid));
+	%>
+
+	//NOTE:
+	//	this is a configuration "save."
+	//	xen's concept of saving is what we will call snapshots
+	boolean modify(VM vm, boolean maketemplate)
+	<%
+		//FIXME
+		_saveVM(&data_->ctx, vm, data_->session->uid, maketemplate);
+	%>
+
+	JOB snapshot(string uuid, int storageid, boolean memory)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_snapshotVM(&data_->ctx, uuid, data_->session->uid, storageid, memory));
+	%>
+
+	int getVCPUs(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getVMattribute(&data_->ctx, uuid, "vcpus"));
+	%>
+
+	int getVNCport(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getVMattribute(&data_->ctx, uuid, "vncport"));
+	%>
+
+	double getCPUtime(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getVMattribute(&data_->ctx, uuid, "cputime"));
+	%>
+
+	int getNumNETIFs(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getNumVMvifs(&data_->ctx, uuid));
+	%>
+
+	int getNumDisks(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getNumVMdisks(&data_->ctx, uuid));
+	%>
+
+	int getMemory(string uuid)
+	<%
+		//#warning for these and similar, wrap _getVMattr/stat in a function that does the conversion and avoid the ugliness
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getVMattribute(&data_->ctx, uuid, "mem"));
+	%>
+
+	int getMaxMemory(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getVMattribute(&data_->ctx, uuid, "maxmem"));
+	%>
+
+	int getUptime(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getVMattribute(&data_->ctx, uuid, "uptime"));
+	%>
+
+	string getUptimeStr(string uuid)
+	<%
+		/* FIXME: this probably isn't what should be returned? */
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getVMattribute(&data_->ctx, uuid, "uptime"));
+	%>
+
+	string getState(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getVMstat(&data_->ctx, uuid, "state"));
+	%>
+/*
+	string getStateStr(string uuid)
+	<%
+		//FIXME implement
+	%>
+*/
+	string getType(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getVMattribute(&data_->ctx, uuid, "type"));
+	%>
+
+	string getOS(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getVMattribute(&data_->ctx, uuid, "os"));
+	%>
+
+	string getVNCpass(string uuid)
+	<%
+		CHECK_EXIST_AND_PRIVS_VM(
+			const char *ret;
+			switch (ctx->count){
+				case 0:
+					_getVMattribute(ctx, uuid, "vncpasswd");
+					CTX_VALUE_RETURN;
+					break;
+				case 1:
+					ret = CTX_PARAM_GET;
+					if (ret && (!strstr(ret, "not set"))){
+						AZY_RETVAL(ret);
+						eina_stringshare_del(ret);
+						break;
+					}
+					eina_stringshare_del(ret);
+					ctx->error = 0;
+					_getVMparentNode(&data_->ctx, uuid);
+					CTX_VALUE_RETURN;
+					break;
+				case 2:
+					ret = CTX_PARAM_GET;
+					if (ctx->error){
+						eina_stringshare_del(ret);
+						break;
+					}
+					_getNodeDefaultVncPass(&data_->ctx, ret);
+					eina_stringshare_del(ret);
+					CTX_VALUE_RETURN;
+					break;
+				case 3:
+					ret = CTX_PARAM_GET;
+					if (ctx->error){
+						eina_stringshare_del(ret);
+						break;
+					}
+					AZY_RETVAL(ret);
+					eina_stringshare_del(ret);
+				default:
+					break;
+			}
+
+		CTX_RETURN);
+	%>
+
+	double getCPUpct(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getVMstat(&data_->ctx, uuid, "cpupct"));
+	%>
+
+	boolean hasGuestTools(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_hasGuestTools(&data_->ctx, uuid));
+	%>
+
+	string getByName(string name)
+	<%
+		//FIXME privs check
+		_getVmByName(&data_->ctx, name);
+	%>
+
+/*
+	double getCPUpctHist(string uuid)
+	<%
+		//FIXME implement. maybe.
+	%>
+
+	double getAvgCPUpct(string uuid)
+	<%
+		//FIXME implement. maybe.
+	%>
+*/
+
+
+	/*
+	 *
+	 * VM NETIFs
+	 *
+	 */
+	JOB attachNetIf(string uuid, string mac, int nwid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_attachNetIf(&data_->ctx, uuid, mac, nwid, data_->session->uid));
+	%>
+
+	JOB detachNetIf(string uuid, string mac, int nwid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_detachNetIf(&data_->ctx, uuid, mac, nwid, data_->session->uid));
+	%>
+
+	JOB addNetIf(string uuid, int nwid, NETIF iface)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_addNetIf(&data_->ctx, uuid, nwid, iface, data_->session->uid));
+	%>
+
+	JOB removeNetIf(string uuid, string mac)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_removeNetIf(&data_->ctx, uuid, mac, data_->session->uid));
+	%>
+
+	JOB modifyNetIf(string uuid, string mac, NETIF netif)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_modifyNetIf(&data_->ctx, uuid, mac, netif, data_->session->uid));
+	%>
+
+	array<NETIF> getNETIFs(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getVMvifs(&data_->ctx, uuid));
+	%>
+
+	/*
+	 *
+	 * VM DISKs
+	 *
+	 */
+	array<DISK> getDisks(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_VM(_getVMdisks(&data_->ctx, uuid));
+	%>
+
+/*
+	JOB attachDisk(string uuid, string path, int storid)
+	<%
+		return NULL;
+		//#warning FIXME
+		//return _attachDiskToStorage(&data_->ctx, uuid, path, storid, data_->session->uid);
+	%>
+
+	JOB detachDisk(string uuid, string path, int storid)
+	<%
+		//#warning FIXME
+		//return _detachDiskFromStorage(&data_->ctx, uuid, path, storid, data_->session->uid);
+		return NULL;
+	%>
+
+	JOB addDisk(string uuid, int storid, DISK disk)
+	<%
+		//#warning FIXME
+		// TODO probably want CHECK_EXIST_AND_PRIVS_VM_AND_DISK or similar
+		// TODO check user/usergroup resource limits?
+		//CHECK_EXIST_AND_PRIVS_VM(_addDisk(&data_->ctx, uuid, storid, disk, data_->session->uid));
+		return NULL;
+	%>
+
+	JOB removeDisk(string uuid, string path)
+	<%
+		//#warning FIXME
+		//CHECK_EXIST_AND_PRIVS_VM(_removeDiskFromStorage(&data_->ctx, uuid, path, data_->session->uid));
+		return NULL;
+	%>
+
+	JOB modifyDisk(string uuid, string path, DISK disk)
+	<%
+		// TODO check user/usergroup resource limits?
+		//#warning FIXME
+		//CHECK_EXIST_AND_PRIVS_VM(_modifyDisk(&data_->ctx, uuid, path, disk, data_->session->uid));
+		return NULL;
+	%>
+*/
+}
+
+/* NODEs */
+Azy_Module Node {
+
+/** START SERVLET INCLUDES **/
+	<%
+
+	//zentific functions
+	#include "zentific-defines.h"
+	#include "ztypes.h"
+	#include "functions-zentific.h"
+	#include "functions-node.h"
+	#include "functions-log.h"
+	#include "functions-vm.h"
+	#include "functions-user.h"
+	#include "functions-network.h"
+	#include "functions-session.h"
+	#include "servlets.h"
+
+	%>
+/** END SERVLET INCLUDES **/
+
+
+/** START SERVLET INITIALIZATION **/
+	// Servlet variables (This code is inserted into struct definition. You can
+	// access these variables using data_ pointer, see below for example)
+	__attrs__
+	<%
+		SESSION *session;
+		zentific_config *zconf;
+		Zentific_Ctx ctx;
+	%>
+
+
+
+	// Called before RPC is processed using methods defined below. You may do some
+	// common call processing here (authentication check, locking, etc.) Return EINA_FALSE
+	// if you want to inhibit actual RPC call.
+	__pre__
+	<%
+		PRE_CALL; /* data_, module */
+	%>
+
+	__post__
+	<%
+		POST; /* data_ */
+	%>
+/** END SERVLET INITIALIZATION **/
+
+/** START SERVLET METHODS **/
+
+	boolean register(NODE node)
+	<%
+		CHECK_ZPOLL_PRIV;
+		_registerNode(&data_->ctx, node);
+	%>
+
+	array<LOG> getLogs(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_NODE(_getNodeLogs(&data_->ctx, uuid));
+	%>
+
+	//updates node stats IFF is registered and whitelisted and active
+	boolean updateStats(string uuid, NODE_STATS stats)
+	<%
+		CHECK_ZPOLL_PRIV;
+		_updateNodeStats(&data_->ctx, uuid, stats);
+	%>
+
+	NODE get(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_NODE(_getNode(&data_->ctx, uuid));
+	%>
+
+	string getName(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_NODE(_getNodeName(&data_->ctx, uuid));
+	%>
+
+	string getNodePlatform(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_NODE(_getNodePlatform(&data_->ctx, uuid));
+	%>
+
+	array<string> getAll()
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getAllNodes(&data_->ctx, -1, NULL, EINA_FALSE, -1, -1);
+	%>
+
+	array<string> getAllRange(int offset, int recordcount)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getAllNodes(&data_->ctx, -1, NULL, EINA_FALSE, offset, recordcount);
+	%>
+
+	array<string> getAllRangeSorted(string sortfield, boolean desc, int offset, int recordcount)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getAllNodes(&data_->ctx, -1, sortfield, desc, offset, recordcount);
+	%>
+
+	array<NODE> getAllFull()
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getAllNodesFull(&data_->ctx);
+	%>
+
+	array<NODE> getAllFullRange(int offset, int recordcount)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getAllNodesFullRangeSorted(&data_->ctx, NULL, EINA_FALSE, offset, recordcount);
+	%>
+
+	array<NODE> getAllFullRangeSorted(string sortfield, boolean desc, int offset, int recordcount)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getAllNodesFullRangeSorted(&data_->ctx, sortfield, desc, offset, recordcount);
+	%>
+
+	int getCount()
+	<%
+		_getNodeCount(&data_->ctx);
+	%>
+
+	array<string> getEnabledNodes()
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getAllNodes(&data_->ctx, 1, NULL, EINA_FALSE, -1, -1);
+	%>
+
+	array<string> getEnabledNodesRange(int offset, int recordcount)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getAllNodes(&data_->ctx, 1, NULL, EINA_FALSE, offset, recordcount);
+	%>
+
+	array<string> getDisabledNodes()
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getAllNodes(&data_->ctx, 0, NULL, EINA_FALSE, -1, -1);
+	%>
+
+	array<string> getDisabledNodesRange(int offset, int recordcount)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getAllNodes(&data_->ctx, 0, NULL, EINA_FALSE, offset, recordcount);
+	%>
+
+
+	array<string> getAllUnconfiguredNodes()
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getAllUnconfiguredNodes(&data_->ctx, -1, -1);
+	%>
+
+	array<string> getAllUnconfiguredNodesRange(int offset, int recordcount)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getAllUnconfiguredNodes(&data_->ctx, offset, recordcount);
+	%>
+
+	NODE getByHostname(string hostname)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getNodeByHostname(&data_->ctx, hostname);
+	%>
+
+	array<NETWORK> getNetworks(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_NODE(_getNetworksByNode(&data_->ctx, uuid));
+	%>
+
+	string getAddress(string uuid)
+	<%
+
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_NODE(_getNodeAddress(&data_->ctx, uuid));
+	%>
+
+/*
+	array<double> getNodeLoadavg(string uuid)
+	<%
+	%>
+*/
+	int getPrivilegeByUID(string uuid, int uid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_NODE(_getNODEprivilege(&data_->ctx, uuid, uid, -1));
+	%>
+
+	int getPrivilegeByGID(string uuid, int gid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_NODE(_getNODEprivilege(&data_->ctx, uuid, -1,  gid));
+	%>
+
+	boolean grantPrivilegeByUID(string uuid, int uid, int level)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_NODE(_grantNODEprivilege(&data_->ctx, uuid, uid, -1, level));
+	%>
+
+	boolean grantPrivilegeByGID(string uuid, int gid, int level)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_NODE(_grantNODEprivilege(&data_->ctx, uuid, -1, gid, level));
+	%>
+
+	boolean revokePrivilegeByUID(string uuid, int uid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_NODE(_revokeNODEprivilege(&data_->ctx, uuid, uid, -1));
+	%>
+
+	boolean revokePrivilegeByGID(string uuid, int gid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_NODE(_revokeNODEprivilege(&data_->ctx, uuid, -1, gid));
+	%>
+
+	boolean supportsHVM(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_NODE(_supportsHvm(&data_->ctx, uuid));
+	%>
+
+	boolean add(NODE node, boolean enabled )
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_addNode(&data_->ctx, node, enabled);
+	%>
+
+	string getControlModule(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_NODE(_getNodeControlModule(&data_->ctx, uuid));
+	%>
+
+	boolean setControlModule(string uuid, int controlmodule)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_NODE(_setNodeControlModule(&data_->ctx, uuid, controlmodule));
+	%>
+
+	boolean setControlModuleByName(string uuid, string controlmodule)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_NODE(_setNodeControlModuleByName(&data_->ctx, uuid, controlmodule));
+	%>
+
+	boolean isNode(string uuid)
+	<%
+		/* FIXME CHECK_EXISTS_AND_PRIV_NODE is inappropriate here
+		 *	 because it throws a DNE error
+		 */
+		_isNODE(&data_->ctx, uuid);
+	%>
+
+	boolean isEnabled(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_NODE(_isNodeEnabled(&data_->ctx, uuid));
+	%>
+
+	boolean enableNode(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_NODE(_setNodeStatus(&data_->ctx, uuid, EINA_TRUE));
+	%>
+
+	boolean disableNode(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_NODE(_setNodeStatus(&data_->ctx, uuid, EINA_FALSE));
+	%>
+
+	boolean removeNode(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_NODE(_removeNode(&data_->ctx, uuid));
+	%>
+
+	NODE_STATS getLatestStat(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_NODE(_getLatestNodeStat(&data_->ctx, uuid));
+	%>
+
+	array<NODE_STATS> getStats(string uuid, int start_epoch, int end_epoch, int max_events, int interval)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_NODE(_getNodeStats(&data_->ctx, uuid, start_epoch, end_epoch, max_events, interval));
+	%>
+
+	string getByName(string name)
+	<%
+		//FIXME privs check
+		_getNodeByName(&data_->ctx, name);
+	%>
+
+/*
+//FIXME: more consideration needed here
+	//status functions
+	boolean isUp(NODE node)
+	<%
+	%>
+
+	boolean maintenanceMode()
+	<%
+	%>
+*/
+
+
+}
+
+Azy_Module User {
+
+/** START SERVLET INCLUDES **/
+	<%
+
+	//zentific functions
+	#include "zentific-defines.h"
+	#include "ztypes.h"
+	#include "functions-zentific.h"
+	#include "functions-session.h"
+	#include "functions-user.h"
+	#include "functions-group.h"
+	#include "functions-console.h"
+	#include "functions-auth.h"
+	#include "servlets.h"
+	#include "servlet-functions.h"
+	%>
+/** END SERVLET INCLUDES **/
+
+
+/** START SERVLET INITIALIZATION **/
+	// Servlet variables (This code is inserted into struct definition. You can
+	// access these variables using data_ pointer, see below for example)
+	__attrs__
+	<%
+		SESSION *session;
+		zentific_config *zconf;
+		Zentific_Ctx ctx;
+	%>
+
+
+
+	// Called before RPC is processed using methods defined below. You may do some
+	// common call processing here (authentication check, locking, etc.) Return EINA_FALSE
+	// if you want to inhibit actual RPC call.
+	__pre__
+	<%
+		PRE_CALL; /* data_, module */
+	%>
+
+	__post__
+	<%
+		POST; /* data_ */
+	%>
+/** END SERVLET INITIALIZATION **/
+
+/** START SERVLET METHODS **/
+
+/*********************************************************************************
+ * USER FUNCTIONS BY UID
+ */
+	boolean isUserUID(int uid)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_isUserUID(&data_->ctx, uid);
+	%>
+
+	string getUsername(int uid)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getUsername(&data_->ctx, uid);
+	%>
+
+	int getType(int uid)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getUserType(&data_->ctx, uid);
+	%>
+
+	USER getByUID(int uid)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getUser(&data_->ctx, uid);
+	%>
+
+	boolean isActive(int uid)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_isActive(&data_->ctx, uid);
+	%>
+
+	string generatePassword(int uid)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_generatePassword(&data_->ctx, uid);
+	%>
+
+	boolean logoutByUID(int uid)
+	<%
+
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_logoutByUID(&data_->ctx, uid);
+	%>
+
+	//FIXME setuseremail, setuseractive etc
+
+	boolean setPasswordByUID(int uid, string password)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_setPassword(&data_->ctx, uid, password);
+	%>
+
+	boolean setAttributeByUID(int uid, string attribute, string value)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_setUserAttribute(&data_->ctx, uid, attribute, value);
+	%>
+
+	boolean removeUser(int uid)
+	<%
+		//FIXME revoke privileges and vm ownership too
+		//	do as separate functions or one
+		//	maybe delete the vm? have flag for that (or a separate function)
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_removeUser(&data_->ctx, uid);
+	%>
+
+	boolean modifyUser(int uid, USER u)
+	<%
+		//FIXME revoke privileges and vm ownership too
+		//	do as separate functions or one
+		//	maybe delete the vm? have flag for that (or a separate function)
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_modifyUser(&data_->ctx, uid, u);
+	%>
+/*********************************************************************************
+ * USER FUNCTIONS BY NAME
+ */
+	boolean isUser(string name)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_isUserName(&data_->ctx, name);
+	%>
+
+	int getUID(string name)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getUserUID(&data_->ctx, name);
+	%>
+
+	int getTypeByName(string name)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getUserTypeByName(&data_->ctx, name);
+	%>
+
+	USER getUserByName(string name)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getUserByName(&data_->ctx, name);
+	%>
+
+
+	boolean isActiveByName(string username)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_isActiveByName(&data_->ctx, username);
+	%>
+
+	string generatePasswordByName(string username)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_generatePasswordByName(&data_->ctx, username);
+	%>
+
+	boolean logoutByName(string username)
+	<%
+
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_logoutByName(&data_->ctx, username);
+	%>
+
+	//FIXME setuseremail, setuseractive etc
+
+	boolean setPasswordByName(string username, string password)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_setPasswordByName(&data_->ctx, username, password);
+	%>
+
+	boolean setAttributeByName(string username, string attribute, string value)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_setUserAttributeByName(&data_->ctx, username, attribute, value);
+	%>
+
+	boolean removeUserByName(string username)
+	<%
+		//FIXME revoke privileges and vm ownership too
+		//	do as separate functions or one
+		//	maybe delete the vm? have flag for that (or a separate function)
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_removeUserByName(&data_->ctx, username);
+	%>
+
+	boolean modifyUserByName(string username, USER u)
+	<%
+		//FIXME revoke privileges and vm ownership too
+		//	do as separate functions or one
+		//	maybe delete the vm? have flag for that (or a separate function)
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+
+		_modifyUserByName(&data_->ctx, username, u);
+	%>
+
+	boolean login(string user, string pass)
+	<%
+		_login(&data_->ctx, user, pass);
+	%>
+/*********************************************************************************
+ * USER FUNCTIONS MISC
+ */
+	boolean logout()
+	<%
+		_logout(&data_->ctx, data_->session->session_id);
+	%>
+
+	int addUser(USER new)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_addUser(&data_->ctx, new);
+	%>
+
+	array<int> getAll()
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getAllUsers(&data_->ctx, NULL, EINA_FALSE, -1, -1);
+	%>
+
+	array<int> getAllRange(int offset, int recordcount)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getAllUsers(&data_->ctx, NULL, EINA_FALSE, offset, recordcount);
+	%>
+
+	array<int> getAllRangeSorted(string sortfield, boolean desc, int offset, int recordcount)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getAllUsers(&data_->ctx, sortfield, desc, offset, recordcount);
+	%>
+
+	array<int> getLoggedInUsers()
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getLoggedInUsers(&data_->ctx);
+	%>
+
+	array<string> getLoggedInUsernames()
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getLoggedInUsernames(&data_->ctx);
+	%>
+
+	int getCount()
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getUserCount(&data_->ctx);
+	%>
+
+	array<USER> getAllFull()
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getAllUsersFull(&data_->ctx, NULL, EINA_FALSE, -1, -1);
+	%>
+
+	array<USER> getAllFullRange(int offset, int recordcount)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getAllUsersFull(&data_->ctx, NULL, EINA_FALSE, offset, recordcount);
+	%>
+
+	array<USER> getAllFullRangeSorted(string sortfield, boolean desc, int offset, int recordcount)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getAllUsersFull(&data_->ctx, sortfield, desc, offset, recordcount);
+	%>
+
+	USER get()
+	<%
+		//returns only the user for current session
+		_getUser(&data_->ctx, data_->session->uid);
+	%>
+
+	boolean setAttribute(string attribute, string value)
+	<%
+		_setUserAttribute(&data_->ctx, data_->session->uid, attribute, value);
+	%>
+
+	boolean setPassword(string oldpassword, string password)
+	<%
+		if (!data_->ctx.auth)
+			_auth(&data_->ctx, oldpassword);
+		else
+			_setPassword(&data_->ctx, data_->session->uid, password);
+	%>
+/*********************************************************************************
+ * GROUP FUNCTIONS BY GID
+ */
+
+	boolean isUserGroup(int gid)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_isUserGroup(&data_->ctx, gid);
+	%>
+
+	boolean modifyUserGroup(int gid, USER_GROUP ug)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_modifyUserGroup(&data_->ctx, gid, ug);
+	%>
+
+	boolean removeUserGroup(int gid)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_removeUserGroup(&data_->ctx, gid);
+	%>
+
+	USER_GROUP getUserGroup(int gid)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getUserGroup(&data_->ctx, gid);
+	%>
+
+	array<int> getUserGroupMembers(int gid)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getUserGroupMembers(&data_->ctx, gid);
+	%>
+
+	array<USER> getUserGroupMembersFull(int gid)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getUserGroupMembersFull(&data_->ctx, gid);
+	%>
+
+	boolean addToUserGroup(int uid, int gid)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_addToUserGroup(&data_->ctx, uid, gid);
+	%>
+
+	boolean removeFromUserGroup(int uid, int gid)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_removeFromUserGroup(&data_->ctx, uid, gid);
+	%>
+
+	boolean renameUserGroup(int gid, string new_name)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_renameUserGroup(&data_->ctx, gid, new_name);
+	%>
+
+/*********************************************************************************
+ * GROUP FUNCTIONS BY GROUP NAME
+ */
+	boolean isUserGroupByName(string groupname)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_isUserGroupByName(&data_->ctx, groupname);
+	%>
+
+
+	int modifyUserGroupByName(string groupname, USER_GROUP ug)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_modifyUserGroupByName(&data_->ctx, groupname, ug);
+	%>
+
+	boolean removeUserGroupByName(string groupname)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_removeUserGroupByName(&data_->ctx, groupname);
+	%>
+
+	USER_GROUP getUserGroupByName(string groupname)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getUserGroupByName(&data_->ctx, groupname);
+	%>
+
+	array<int> getUserGroupMembersByName(string groupname)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getUserGroupMembersByName(&data_->ctx, groupname);
+	%>
+
+	boolean addToUserGroupByName(int uid, string groupname)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_addToUserGroupByName(&data_->ctx, uid, groupname);
+	%>
+
+	boolean addToUserGroupByNameAndUsername(string username, string groupname)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_addToUserGroupByNameAndUsername(&data_->ctx, username, groupname);
+	%>
+
+	boolean removeFromUserGroupByName(int uid, string groupname)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_removeFromUserGroupByName(&data_->ctx, uid, groupname);
+	%>
+
+	boolean removeFromUserGroupByNameAndUsername(string username, string groupname)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_removeFromUserGroupByNameAndUsername(&data_->ctx, username, groupname);
+	%>
+
+	boolean renameUserGroupByName(string groupname, string new_name)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_renameUserGroupByName(&data_->ctx, groupname, new_name);
+	%>
+
+/*********************************************************************************
+ * GROUP FUNCTIONS MISC
+ */
+	int addUserGroup(USER_GROUP ug)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_addUserGroup(&data_->ctx, ug);
+	%>
+
+	array<int> getUserGroupsByUID(int uid)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getUserGroupsByUID(&data_->ctx, uid);
+	%>
+
+	array<int> getUserGroups()
+	<%
+		_getUserGroupsByUID(&data_->ctx, data_->session->uid);
+	%>
+
+	array<string> getUserGroupNames()
+	<%
+		_getUserGroupNamesByUID(&data_->ctx, data_->session->uid);
+	%>
+
+	array<int> getUserGroupsByName(string username)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getUserGroupsByName(&data_->ctx, username);
+	%>
+
+	array<string> getUserGroupNamesByUID(int uid)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getUserGroupNamesByUID(&data_->ctx, uid);
+	%>
+
+	array<string> getUserGroupNamesByName(string username)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getUserGroupNamesByName(&data_->ctx, username);
+	%>
+
+	array<int> getAllUserGroups()
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getAllUserGroups(&data_->ctx, NULL, EINA_FALSE, -1, -1);
+	%>
+
+	array<int> getAllUserGroupsRange(int offset, int recordcount)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getAllUserGroups(&data_->ctx, NULL, EINA_FALSE, offset, recordcount);
+	%>
+
+	array<int> getAllUserGroupsRangeSorted(string sortfield, boolean desc, int offset, int recordcount)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getAllUserGroups(&data_->ctx, sortfield, desc, offset, recordcount);
+	%>
+
+	array<string> getAllUserGroupNames()
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getAllUserGroupNames(&data_->ctx, -1, -1);
+	%>
+
+	array<string> getAllUserGroupNamesRange(int offset, int recordcount)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getAllUserGroupNames(&data_->ctx, offset, recordcount);
+	%>
+
+	array<USER_GROUP> getAllUserGroupsFull()
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getAllUserGroupsFull(&data_->ctx, NULL, EINA_FALSE, -1, -1);
+	%>
+
+	array<USER_GROUP> getAllUserGroupsFullRange(int offset, int recordcount)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getAllUserGroupsFull(&data_->ctx, NULL, EINA_FALSE, offset, recordcount);
+	%>
+
+	array<USER_GROUP> getAllUserGroupsFullRangeSorted(string sortfield, boolean desc, int offset, int recordcount)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getAllUserGroupsFull(&data_->ctx, sortfield, desc, offset, recordcount);
+	%>
+
+	int getGroupCount()
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getUserGroupCount(&data_->ctx);
+	%>
+}
+
+Azy_Module Session {
+
+/** START SERVLET INCLUDES **/
+	<%
+
+	//zentific functions
+	#include "zentific-defines.h"
+	#include "ztypes.h"
+	#include "functions-zentific.h"
+	#include "functions-user.h"
+	#include "functions-session.h"
+	#include "servlets.h"
+	%>
+/** END SERVLET INCLUDES **/
+
+
+/** START SERVLET INITIALIZATION **/
+	// Servlet variables (This code is inserted into struct definition. You can
+	// access these variables using data_ pointer, see below for example)
+	__attrs__
+	<%
+		SESSION *session;
+		zentific_config *zconf;
+		Zentific_Ctx ctx;
+	%>
+
+
+
+
+	// Called before RPC is processed using methods defined below. You may do some
+	// common call processing here (authentication check, locking, etc.) Return EINA_FALSE
+	// if you want to inhibit actual RPC call.
+	__pre__
+	<%
+		PRE_CALL; /* data_, module */
+	%>
+
+	__post__
+	<%
+		POST; /* data_ */
+	%>
+/** END SERVLET INITIALIZATION **/
+
+/** START SERVLET METHODS **/
+
+	int checkSession(string sessid)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_checkSessionUUID(&data_->ctx, sessid);
+	%>
+
+	boolean isLoggedIn()
+	<%
+		int ret = (data_->session->status == AZY_ERRCODE(VALID_SESSION));
+		AZY_RETVAL((intptr_t*)ret);
+		CTX_RETURN;
+	%>
+/* FIXME need a session xmlrpc struct
+	SESSION getSession(string sessid)
+	<%
+
+	%>
+
+	boolean _setSession(struct _SESSION session)
+	<%
+
+	%>
+*/
+
+}
+
+
+
+
+
+
+
+
+
+Azy_Module Zentific {
+
+/** START SERVLET INCLUDES **/
+	<%
+
+	//zentific functions
+	#include "zentific-defines.h"
+	#include "ztypes.h"
+	#include "zconf.h"
+	#include "functions-zentific.h"
+	#include "functions-platform.h"
+	#include "functions-session.h"
+	#include "functions-vm.h"
+	#include "functions-user.h"
+	#include "servlet-functions.h"
+	#include "servlets.h"
+	%>
+/** END SERVLET INCLUDES **/
+
+
+/** START SERVLET INITIALIZATION **/
+	// Servlet variables (This code is inserted into struct definition. You can
+	// access these variables using data_ pointer, see below for example)
+	__attrs__
+	<%
+		SESSION *session;
+		zentific_config *zconf;
+		Zentific_Ctx ctx;
+	%>
+
+
+
+	// Called before RPC is processed using methods defined below. You may do some
+	// common call processing here (authentication check, locking, etc.) Return EINA_FALSE
+	// if you want to inhibit actual RPC call.
+	__pre__
+	<%
+		PRE_CALL; /* data_, module */
+	%>
+
+	// Called after each call is processed and before server sends response to the
+	// client.
+	__post__
+	<%
+		POST; /* data_ */
+	%>
+
+	/* serve GET request, if served return EINA_TRUE, otherwise return EINA_FALSE */
+
+	__download__
+	<%
+		_servlet_download((Server_Module*)data_);
+	%>
+
+
+/** END SERVLET INITIALIZATION **/
+
+/*
+	//stub
+	boolean log(string msg)
+	<%
+
+		return EINA_TRUE;
+	%>
+*/
+	boolean hello()
+	<%
+		AZY_RETVAL(EINA_TRUE); /* data_ module */
+		CTX_RETURN;
+	%>
+
+	string getConfig(string key)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getConfig(&data_->ctx, key);
+	%>
+
+	array<string> getLanguages()
+	<%
+		_getLanguages(&data_->ctx);
+	%>
+
+	boolean setConfig(string key, string value)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_setConfig(&data_->ctx, key, value);
+	%>
+
+	boolean setConfigs(array<KEYVALUE> configs)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_setConfigs(&data_->ctx, configs);
+	%>
+
+	array<KEYVALUE> getConfigsFull()
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getConfigsFull(&data_->ctx);
+	%>
+
+	array<string> getFrontendPlugins()
+	<%
+		//FIXME if doing priv based module presentation,
+		//	add that here
+
+		if (!data_->ctx.user_type)
+			_getFrontendPlugins(&data_->ctx, -1);
+		else
+			_getFrontendPlugins(&data_->ctx, 1);
+	%>
+
+	boolean modifyPlugin(string name, boolean enabled, boolean xmlrpc, boolean frontend, boolean scheduler, boolean poller)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_modifyPlugin(&data_->ctx, name, enabled, xmlrpc, frontend, scheduler, poller);
+	%>
+
+	boolean isFrontendPluginEnabled(string name)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_isFrontendPluginEnabled(&data_->ctx, name);
+	%>
+
+	array<PLUGIN> getAllPlugins()
+	<%
+		if (!data_->ctx.user_type)
+			_getAllPlugins(&data_->ctx, -1);
+		else
+			_getAllPlugins(&data_->ctx, 1);
+	%>
+
+	int version()
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		AZY_RETVAL(ZENTIFIC_REVISION); /* data_ module */
+		CTX_RETURN;
+	%>
+
+	array<string> getOperatingSystems()
+	<%
+		_getOperatingSystems(&data_->ctx);
+	%>
+
+	boolean cleanDB()
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_cleanDB(&data_->ctx);
+	%>
+
+	boolean configPush(string uuid)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_configPush(&data_->ctx, uuid);
+	%>
+
+	string generateUUID()
+	<%
+		AZY_RETVAL(azy_uuid_new()); /* data_ module */
+		CTX_RETURN;
+	%>
+
+	string generateMAC()
+	<%
+		_generateMAC(&data_->ctx);
+	%>
+
+	boolean reloadConfig()
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+
+		config_reparse(&data_->zconf);
+		AZY_RETVAL(EINA_TRUE); /* data_ module */
+		CTX_RETURN;
+	%>
+
+	boolean reloadModules()
+	<%
+		extern Eina_Bool modules_reload_begin(void);
+		Eina_Bool ret;
+		/* data_ module */
+		CHECK_SUPER_PRIV; /* data_ module */
+
+		ret = modules_reload_begin();
+		AZY_RETVAL(!!ret);
+		CTX_RETURN;
+	%>
+}
+
+Azy_Module Scheduler {
+
+/** START SERVLET INCLUDES **/
+	<%
+
+	//zentific functions
+	#include "zentific-defines.h"
+	#include "ztypes.h"
+	#include "functions-zentific.h"
+	#include "functions-user.h"
+	#include "functions-jobs.h"
+	#include "functions-session.h"
+	#include "servlets.h"
+	%>
+/** END SERVLET INCLUDES **/
+
+
+/** START SERVLET INITIALIZATION **/
+	// Servlet variables (This code is inserted into struct definition. You can
+	// access these variables using data_ pointer, see below for example)
+	__attrs__
+	<%
+		SESSION *session;
+		zentific_config *zconf;
+		Zentific_Ctx ctx;
+	%>
+
+
+
+	// Called before RPC is processed using methods defined below. You may do some
+	// common call processing here (authentication check, locking, etc.) Return EINA_FALSE
+	// if you want to inhibit actual RPC call.
+	__pre__
+	<%
+		PRE_CALL; /* data_, module */
+	%>
+
+	__post__
+	<%
+		POST; /* data_ */
+	%>
+/** END SERVLET INITIALIZATION **/
+
+/** START SERVLET METHODS **/
+	JOB getJob(int id)
+	<%
+		_getJob(&data_->ctx, id, data_->session->uid);
+	%>
+
+	array<int> getRecentJobsByUID(int uid)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+
+		_getRecentJobsByUID(&data_->ctx, uid);
+	%>
+
+	array<int> getRecentJobs()
+	<%
+		if (!data_->ctx.user_type)
+			_getRecentJobs(&data_->ctx);
+		else
+			_getRecentJobsByUID(&data_->ctx, data_->session->uid);
+	%>
+
+	array<JOB> getJobsByJIDs(array<int> jobids)
+	<%
+		//user validation done at next tier
+		_getJobsByJIDs(&data_->ctx, jobids, data_->session->uid);
+	%>
+
+	array<int> getJobs()
+	<%
+
+		if (!data_->ctx.user_type)
+			_getJobs(&data_->ctx);
+		else
+			_getJobsByUID(&data_->ctx, data_->session->uid);
+	%>
+
+	array<int> getJobsByUID(int uid)
+	<%
+		_getJobsByUID(&data_->ctx, uid);
+	%>
+
+	array<int> getJobsByUUID(string uuid)
+	<%
+		_getJobsByUUID(&data_->ctx, uuid);
+	%>
+
+	int getJobStatus(int jobid)
+	<%
+		_getJobStatus(&data_->ctx, jobid, data_->session->uid);
+	%>
+
+	array<int> getJobsStatus(array<int> jobids)
+	<%
+		_getJobsStatus(&data_->ctx, jobids, data_->session->uid);
+	%>
+
+	/* keep generic; node or vm (or any other resource that we give a uuid in
+	 *	the future
+	 */
+	int cancelJobsByUUID(string uuid)
+	<%
+		_cancelJobsByUUID(&data_->ctx, uuid, data_->session->uid);
+	%>
+
+	int cancelJobsByUID(int uid)
+	<%
+		_cancelJobsByUID(&data_->ctx, uid, data_->session->uid);
+	%>
+
+	int cancelJob(int jobid)
+	<%
+		_cancelJob(&data_->ctx, jobid, data_->session->uid);
+	%>
+
+	int addJob(JOB job)
+	<%
+	/*
+	TODO revisit permissions
+	NOTE addJob COULD have more involved permissions than just superuser.\
+	might be very valid to NOT permit normal user access in case\
+	some module vulnerability in the scheduler can be exploited via\
+	this mechanism. otherwise, permit/deny based upon vm/node ownership, etc
+	*/
+		CHECK_SUPER_PRIV;
+
+		_addJob(&data_->ctx, job, data_->session->uid);
+	%>
+
+}
+
+Azy_Module system {
+
+//FIXME decide whether system module should contain high level zentific methods
+
+	// system module serves as global server
+	//	documentation. define high level stuff here
+
+	//failed
+	array<string> listMethods()
+	<%
+//#warning include a header generated via nm here. break spec a bit and respond with all module.method()s?
+		char *methods[40];
+		methods[0] = "system.listMethods";
+		methods[1] = "system.getCapabilities";
+		methods[2] = "system.methodSignature";
+		methods[3] = "system.methodHelp";
+		methods[4] = "system.multicall";
+
+		int i;
+		for (i=0; i<4; i++)
+			retval = eina_list_append(retval, eina_stringshare_add(methods[i]));
+
+	%>
+
+	string methodHelp(string methodname)
+	<%
+		return eina_stringshare_add("does some stuff");
+	%>
+
+	// Returns an array of possible signatures for this method.
+	//  A signature is an array of types.
+	//  The first of these types is the return type of the method, the rest are parameters.
+	// The XMLRPC spec permits Multiple signatures (i.e. overloading), and this is the
+	//  reason that an array of signatures are returned by this method.
+	//  The semantics of C and libzxr do not enable overloading in this way, so this is just
+	//  an informative comment from steve when he was in the mood for documenting things.
+	array<array<string>> methodSignature(string methodname)
+	<%
+
+		Eina_List *signatures = NULL;
+
+		//for each method here encompasses, do this
+		// params vary by method, so big lookup table in a struct?
+		int num_parameters = 1;
+
+		//add one for the return type, which is always the first listed
+		char *signature[num_parameters + 1];
+		//return type
+		signature[0] = "array";
+		//parameters
+		signature[1] = "string";
+
+		int i;
+		for (i=0; i<num_parameters+1; i++)
+			signatures = eina_list_append(signatures, eina_stringshare_add(signature[i]));
+
+		//finally, add
+		retval = eina_list_append(retval, signatures);
+	%>
+
+}
+
+Azy_Module Platform {
+
+/** START SERVLET INCLUDES **/
+	<%
+
+	//zentific functions
+	#include "zentific-defines.h"
+	#include "ztypes.h"
+	#include "functions-zentific.h"
+	#include "functions-platform.h"
+	#include "functions-session.h"
+	#include "functions-debug.h"
+	#include "functions-user.h"
+	#include "servlets.h"
+	%>
+/** END SERVLET INCLUDES **/
+
+
+/** START SERVLET INITIALIZATION **/
+	// Servlet variables (This code is inserted into struct definition. You can
+	// access these variables using data_ pointer, see below for example)
+	__attrs__
+	<%
+		SESSION *session;
+		zentific_config *zconf;
+		Zentific_Ctx ctx;
+	%>
+
+
+
+	// Called before RPC is processed using methods defined below. You may do some
+	// common call processing here (authentication check, locking, etc.) Return EINA_FALSE
+	// if you want to inhibit actual RPC call.
+	__pre__
+	<%
+		PRE_CALL; /* data_, module */
+	%>
+
+	__post__
+	<%
+		POST; /* data_ */
+	%>
+/** END SERVLET INITIALIZATION **/
+
+/** START SERVLET METHODS **/
+
+/** END SERVLET INITIALIZATION **/
+
+/** START SERVLET METHODS **/
+	array<int> getAll()
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getPlatforms(&data_->ctx);
+	%>
+
+	array<PLATFORM> getAllFull()
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getPlatformsFull(&data_->ctx);
+	%>
+
+	PLATFORM get(int id)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getPlatform(&data_->ctx, id);
+	%>
+
+	boolean modify(int id, PLATFORM p)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_modifyPlatform(&data_->ctx, id, p);
+	%>
+
+	PLATFORM getByName(string name)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getPlatformByName(&data_->ctx, name);
+	%>
+
+	array<int> getModulesByPlatformID(int platformid)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getControlModulesByPlatform(&data_->ctx, platformid);
+	%>
+
+	array<PLUGIN> getModulesFull()
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getControlModulesFull(&data_->ctx);
+	%>
+
+	array<int> getModules()
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getControlModules(&data_->ctx);
+	%>
+
+	PLUGIN getModuleByID(int id)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getControlModule(&data_->ctx, id);
+	%>
+
+	PLUGIN getModuleByName(string name)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getControlModuleByName(&data_->ctx, name);
+	%>
+
+	boolean isPlatform(string name)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_isPlatformByName(&data_->ctx, name);
+	%>
+
+	boolean isModule(string name, int platformid)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_isControlModuleForPlatform(&data_->ctx, name, platformid);
+	%>
+
+	boolean isModuleByName(string name, string platformname)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_isControlModuleForPlatformByName(&data_->ctx, name, platformname);
+	%>
+
+	boolean add(PLATFORM p)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_addPlatform(&data_->ctx, p);
+	%>
+
+	boolean setSecureModuleConfig(int mid, KEYVALUE modconf)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_setSecureControlModuleConfig(&data_->ctx, mid, modconf);
+	%>
+
+	boolean setConfig(int id, array<KEYVALUE> config)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_setPlatformConfig(&data_->ctx, id, config);
+	%>
+
+	array<KEYVALUE> getConfig(int id)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getPlatformConfig(&data_->ctx, id);
+	%>
+
+	array<KEYVALUE> getModuleConfig(int id)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getControlModuleConfig(&data_->ctx, id);
+	%>
+
+	boolean setModuleConfig(int id, array<KEYVALUE> config)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_setControlModuleConfig(&data_->ctx, id, config);
+	%>
+
+
+}
+
+Azy_Module Storage {
+
+/** START SERVLET INCLUDES **/
+	<%
+
+	//zentific functions
+	#include "zentific-defines.h"
+	#include "ztypes.h"
+	#include "functions-zentific.h"
+	#include "functions-session.h"
+	#include "functions-storage.h"
+	#include "functions-node.h"
+	#include "functions-user.h"
+	#include "servlets.h"
+	%>
+/** END SERVLET INCLUDES **/
+
+
+/** START SERVLET INITIALIZATION **/
+	// Servlet variables (This code is inserted into struct definition. You can
+	// access these variables using data_ pointer, see below for example)
+	__attrs__
+	<%
+		SESSION *session;
+		zentific_config *zconf;
+		Zentific_Ctx ctx;
+	%>
+
+
+
+	// Called before RPC is processed using methods defined below. You may do some
+	// common call processing here (authentication check, locking, etc.) Return EINA_FALSE
+	// if you want to inhibit actual RPC call.
+	__pre__
+	<%
+		PRE_CALL; /* data_, module */
+	%>
+
+	__post__
+	<%
+		POST; /* data_ */
+	%>
+/** END SERVLET INITIALIZATION **/
+
+/** START SERVLET METHODS **/
+	JOB detachNodesByStorage(int storid)
+	<%
+		_detachAllNodesByStorage(&data_->ctx, storid, data_->session->uid);
+	%>
+
+	boolean isStorage(STORAGE stor)
+	<%
+		_isStorage(&data_->ctx, stor);
+	%>
+
+	boolean isStorageId(int id)
+	<%
+		_isStorageId(&data_->ctx, id);
+	%>
+
+	int getIdByName(string name)
+	<%
+		_getStorageIdByName(&data_->ctx, name);
+	%>
+
+	STORAGE get(int id)
+	<%
+		_getStorage(&data_->ctx, id);
+	%>
+
+	array<string> getTypes()
+	<%
+		_getAllStorageTypes(&data_->ctx);
+	%>
+
+	array<int> getAllByType(string type)
+	<%
+		_getAllStorageByType(&data_->ctx, type, -1, -1);
+	%>
+
+	array<int> getAllByTypeRange(string type, int offset, int recordcount)
+	<%
+		_getAllStorageByType(&data_->ctx, type, offset, recordcount);
+	%>
+
+	array<int> getAll()
+	<%
+		_getAllStorage(&data_->ctx, NULL, EINA_FALSE, -1, -1);
+	%>
+
+	array<int> getAllRange(int offset, int recordcount)
+	<%
+		_getAllStorage(&data_->ctx, NULL, EINA_FALSE, offset, recordcount);
+	%>
+
+	array<int> getAllRangeSorted(string sortfield, boolean desc, int offset, int recordcount)
+	<%
+		_getAllStorage(&data_->ctx, sortfield, desc, offset, recordcount);
+	%>
+
+	array<DISK> getDisks(int id)
+	<%
+		_getDisksByStorage(&data_->ctx, id);
+	%>
+
+	array<STORAGE> getAllFull()
+	<%
+		_getAllStorageFull(&data_->ctx, NULL, EINA_FALSE, -1, -1);
+	%>
+
+	array<STORAGE> getAllFullRange(int offset, int recordcount)
+	<%
+		_getAllStorageFull(&data_->ctx, NULL, EINA_FALSE, offset, recordcount);
+	%>
+
+	array<STORAGE> getAllFullRangeSorted(string sortfield, boolean desc, int offset, int recordcount)
+	<%
+		_getAllStorageFull(&data_->ctx, sortfield, desc, offset, recordcount);
+	%>
+
+	int getCount()
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getStorageCount(&data_->ctx);
+	%>
+
+	int define(STORAGE stor)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+
+		_defineStorage(&data_->ctx, stor);
+	%>
+
+	JOB modify(int id, STORAGE stor)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_modifyStorage(&data_->ctx, id, stor, data_->session->uid);
+	%>
+
+	boolean remove(int id)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_removeStorage(&data_->ctx, id);
+	%>
+
+	JOB attachToNode(string uuid, int storid)
+	<%
+		_attachStorageToNode(&data_->ctx, uuid, storid, data_->session->uid);
+
+	%>
+
+	JOB detachFromNode(string uuid, int storid)
+	<%
+		_detachStorageFromNode(&data_->ctx, uuid, storid, data_->session->uid);
+
+	%>
+
+	boolean setControlModule(int id, int mid)
+	<%
+		//permissions FIXME
+		_setStorageControlModule(&data_->ctx, id, mid);
+	%>
+
+	int getConfiguredControlModule(int id)
+	<%
+		//permissions FIXME
+		_getStorageControlModule(&data_->ctx, id);
+	%>
+
+	array<STORAGE> getByNode(string uuid)
+	<%
+		_getStorageByNode(&data_->ctx, uuid);
+	%>
+
+	array<string> getNodesByStorage(int storid)
+	<%
+		_getNodesByStorage(&data_->ctx, storid);
+	%>
+
+	array<string> getVmsByStorage(int storid)
+	<%
+		_getVmsByStorage(&data_->ctx, storid);
+	%>
+
+	array<PLUGIN> getControlModulesFull()
+	<%
+		_getStorageControlModulesFull(&data_->ctx);
+	%>
+
+	array<int> getControlModules()
+	<%
+		_getStorageControlModules(&data_->ctx);
+	%>
+
+	JOB detachDisksByStorage(int storid)
+	<%
+		_detachAllDisksByStorage(&data_->ctx, storid, data_->session->uid);
+	%>
+
+	boolean defineDisk(int storid, DISK disk)
+	<%
+		_defineDisk(&data_->ctx, storid, disk, data_->session->uid);
+	%>
+
+	JOB addDisk(int storid, DISK disk)
+	<%
+		_addDiskToStorage(&data_->ctx, storid, disk, data_->session->uid);
+	%>
+
+	JOB modifyDisk(int storid, string path, DISK disk)
+	<%
+		_modifyDiskByStorage(&data_->ctx, storid, path, disk, data_->session->uid);
+	%>
+
+	JOB removeDisk(int storid, string path)
+	<%
+		_removeDiskFromStorage(&data_->ctx, storid, path, data_->session->uid);
+	%>
+
+	JOB enableDisk(int storid, string path)
+	<%
+		_enableDiskByStorage(&data_->ctx, storid, path, data_->session->uid);
+	%>
+
+	JOB disableDisk(int storid, string path)
+	<%
+		_removeDiskFromStorage(&data_->ctx, storid, path, data_->session->uid);
+	%>
+
+	JOB attachDisk(int storid, string path)
+	<%
+		_attachDiskToStorage(&data_->ctx, storid, path, data_->session->uid);
+	%>
+
+	JOB detachDisk(int storid, string path)
+	<%
+		_detachDiskFromStorage(&data_->ctx, storid, path, data_->session->uid);
+	%>
+
+}
+
+Azy_Module Network {
+
+/** START SERVLET INCLUDES **/
+	<%
+
+	//zentific functions
+	#include "zentific-defines.h"
+	#include "ztypes.h"
+	#include "functions-zentific.h"
+	#include "functions-session.h"
+	#include "functions-network.h"
+	#include "functions-vm.h"
+	#include "functions-node.h"
+	#include "functions-user.h"
+	#include "servlets.h"
+	%>
+/** END SERVLET INCLUDES **/
+
+
+/** START SERVLET INITIALIZATION **/
+	// Servlet variables (This code is inserted into struct definition. You can
+	// access these variables using data_ pointer, see below for example)
+	__attrs__
+	<%
+		SESSION *session;
+		zentific_config *zconf;
+		Zentific_Ctx ctx;
+	%>
+
+
+
+	// Called before RPC is processed using methods defined below. You may do some
+	// common call processing here (authentication check, locking, etc.) Return EINA_FALSE
+	// if you want to inhibit actual RPC call.
+	__pre__
+	<%
+		PRE_CALL; /* data_, module */
+	%>
+
+	__post__
+	<%
+		POST; /* data_ */
+	%>
+/** END SERVLET INITIALIZATION **/
+
+/** START SERVLET METHODS **/
+	boolean isNetwork(NETWORK net)
+	<%
+		_isNetwork(&data_->ctx, net);
+	%>
+
+	boolean isNetworkId(int id)
+	<%
+		_isNetworkId(&data_->ctx, id);
+	%>
+
+	NETWORK get(int id)
+	<%
+		_getNetwork(&data_->ctx, id);
+	%>
+
+	int getIdByName(string name)
+	<%
+		_getNetworkIdByName(&data_->ctx, name);
+	%>
+
+	array<NETWORK> getByNode(string uuid)
+	<%
+		/* data_ module */
+		CHECK_EXIST_AND_PRIVS_NODE(_getNetworksByNode(&data_->ctx, uuid));
+	%>
+
+	array<int> getAllByType(string type)
+	<%
+		_getAllNetworksByType(&data_->ctx, type, -1, -1);
+	%>
+
+	array<int> getAllByTypeRange(string type, int offset, int recordcount)
+	<%
+		_getAllNetworksByType(&data_->ctx, type, offset, recordcount);
+	%>
+
+	array<int> getAll()
+	<%
+		_getAllNetworks(&data_->ctx, NULL, EINA_FALSE, -1, -1);
+	%>
+
+	array<int> getAllRange(int offset, int recordcount)
+	<%
+		_getAllNetworks(&data_->ctx, NULL, EINA_FALSE, offset, recordcount);
+	%>
+
+	array<int> getAllRangeSorted(string sortfield, boolean desc, int offset, int recordcount)
+	<%
+		_getAllNetworks(&data_->ctx, sortfield, desc, offset, recordcount);
+	%>
+
+	array<NETWORK> getAllFull()
+	<%
+		_getAllNetworksFull(&data_->ctx, NULL, EINA_FALSE, -1, -1);
+	%>
+
+	array<NETWORK> getAllFullRange(int offset, int recordcount)
+	<%
+		_getAllNetworksFull(&data_->ctx, NULL, EINA_FALSE, offset, recordcount);
+	%>
+
+	array<NETWORK> getAllFullRangeSorted(string sortfield, boolean desc, int offset, int recordcount)
+	<%
+		_getAllNetworksFull(&data_->ctx, sortfield, desc, offset, recordcount);
+	%>
+
+	int getCount()
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_getNetworkCount(&data_->ctx);
+	%>
+
+	int define(NETWORK nw)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+
+		_defineNetwork(&data_->ctx, nw);
+	%>
+
+	JOB modify(int id, NETWORK nw)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_modifyNetwork(&data_->ctx, id, nw, data_->session->uid);
+	%>
+
+	boolean remove(int id)
+	<%
+		/* data_ module */
+		CHECK_SUPER_PRIV;
+		_removeNetwork(&data_->ctx, id);
+	%>
+
+	JOB attachToNode(string uuid, int nwid)
+	<%
+		_attachNetworkToNode(&data_->ctx, uuid, nwid, data_->session->uid);
+	%>
+
+	JOB detachFromNode(string uuid, int nwid)
+	<%
+		_detachNetworkFromNode(&data_->ctx, uuid, nwid, data_->session->uid);
+	%>
+
+	JOB detachNodesByNetwork(int nwid)
+	<%
+		_detachAllNodesByNetwork(&data_->ctx, nwid, data_->session->uid);
+	%>
+
+	array<PLUGIN> getControlModulesFull()
+	<%
+		_getNetworkControlModulesFull(&data_->ctx);
+	%>
+
+	array<int> getControlModules()
+	<%
+		_getNetworkControlModules(&data_->ctx);
+	%>
+
+	JOB detachNetIfsByNetwork(int nwid)
+	<%
+		_detachAllNetIfsByNetwork(&data_->ctx, nwid, data_->session->uid);
+	%>
+
+	array<NODE> getNodesByNetworkFull(int nwid)
+	<%
+		_getNodesByNetworkFull(&data_->ctx, nwid);
+	%>
+
+	array<VM> getVmsByNetworkFull(int nwid)
+	<%
+		_getVmsByNetworkFull(&data_->ctx, nwid);
+	%>
+
+	array<string> getNodesByNetwork(int nwid)
+	<%
+		_getNodesByNetwork(&data_->ctx, nwid);
+	%>
+
+	array<string> getVmsByNetwork(int nwid)
+	<%
+		_getVmsByNetwork(&data_->ctx, nwid);
+	%>
+
+	JOB attachNetIf(string uuid, string mac, int nwid)
+	<%
+		_attachNetIf(&data_->ctx, uuid, mac, nwid, data_->session->uid);
+	%>
+
+	JOB detachNetIf(string uuid, string mac, int nwid)
+	<%
+		_detachNetIf(&data_->ctx, uuid, mac, nwid, data_->session->uid);
+	%>
+}
+
+Azy_Module DEBUG {
+
+/** START SERVLET INCLUDES **/
+	<%
+
+	//zentific functions
+	#include "zentific-defines.h"
+	#include "ztypes.h"
+	#include "functions-zentific.h"
+	#include "functions-session.h"
+	#include "functions-debug.h"
+	#include "servlets.h"
+	%>
+/** END SERVLET INCLUDES **/
+
+
+/** START SERVLET INITIALIZATION **/
+	// Servlet variables (This code is inserted into struct definition. You can
+	// access these variables using data_ pointer, see below for example)
+	__attrs__
+	<%
+		SESSION *session;
+		zentific_config *zconf;
+		Zentific_Ctx ctx;
+	%>
+
+
+
+	// Called before RPC is processed using methods defined below. You may do some
+	// common call processing here (authentication check, locking, etc.) Return EINA_FALSE
+	// if you want to inhibit actual RPC call.
+	__pre__
+	<%
+		PRE_CALL; /* data_, module */
+	%>
+
+	__post__
+	<%
+		POST; /* data_ */
+	%>
+/** END SERVLET INITIALIZATION **/
+
+/** START SERVLET METHODS **/
+
+/** END SERVLET INITIALIZATION **/
+
+/** START SERVLET METHODS **/
+	int crashme()
+	<%
+		_crashme();
+	%>
+
+	int nonexist()
+	<%
+		_nonexist();
+	%>
+}

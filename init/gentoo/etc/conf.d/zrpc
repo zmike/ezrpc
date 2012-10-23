@@ -1,0 +1,4 @@
+#ZRPC_OPTS="-p 4444 -L /var/log/zentific/zrpc.log -t 10"
+ZRPC_PORT="4444"
+ZRPC_LOGFILE="/var/log/zentific/zrpc.log"
+ZRPC_THREADS="10"

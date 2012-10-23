@@ -1,0 +1,34 @@
+#! /bin/sh
+# Reload zrpc when an interface comes up, to allow it to start
+# listening on new addresses.
+
+set -e
+
+# Don't bother to restart zrpc when lo is configured.
+if [ "$IFACE" = lo ]; then
+	exit 0
+fi
+
+# Only run from ifup.
+if [ "$MODE" != start ]; then
+	exit 0
+fi
+
+if [ "$ADDRFAM" != inet ] && [ "$ADDRFAM" != inet6 ]; then
+	exit 0
+fi
+
+# Is /opt mounted?
+if [ ! -e /opt/zentific/bin/zrpc ]; then
+	exit 0
+fi
+
+if [ ! -f /var/run/zentific/zrpc.pid ] || \
+   [ "$(ps -p "$(cat /var/run/zentific/zrpc.pid)" -o comm=)" != zrpc ]; then
+	exit 0
+fi
+
+/etc/init.d/zrpc restart >/dev/null 2>&1 || true
+
+exit 0
+
